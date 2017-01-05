@@ -51,7 +51,7 @@
         public Task Publish<TNotification>(TNotification notification, CancellationToken cancellationToken = default(CancellationToken))
             where TNotification : INotification
         {
-            var notificationType = typeof(TNotification);
+            var notificationType = notification.GetType();
             var notificationHandlers = _multiInstanceFactory(typeof(INotificationHandler<>).MakeGenericType(notificationType))
                 .Cast<INotificationHandler<TNotification>>()
                 .Select(handler =>
@@ -61,16 +61,46 @@
                 });
             var asyncNotificationHandlers = _multiInstanceFactory(typeof(IAsyncNotificationHandler<>).MakeGenericType(notificationType))
                 .Cast<IAsyncNotificationHandler<TNotification>>()
-                .Select(handler => handler.Handle(notification));
+                .Select(handler => DispatchAsyncNotification(handler, notification));
             var cancellableAsyncNotificationHandlers = _multiInstanceFactory(typeof(ICancellableAsyncNotificationHandler<>).MakeGenericType(notificationType))
                 .Cast<ICancellableAsyncNotificationHandler<TNotification>>()
-                .Select(handler => handler.Handle(notification, cancellationToken));
+                .Select(handler => DispatchCancellableAsyncNotification(handler, notification, cancellationToken));
 
             var allHandlers = notificationHandlers
                 .Concat(asyncNotificationHandlers)
                 .Concat(cancellableAsyncNotificationHandlers);
 
             return Task.WhenAll(allHandlers);
+        }
+
+        protected virtual Task DispatchAsyncNotification<TNotification>(IAsyncNotificationHandler<TNotification> handler, TNotification notification) where TNotification : INotification
+        {
+            return handler.Handle(notification);
+        }
+
+        protected virtual Task DispatchCancellableAsyncNotification<TNotification>(ICancellableAsyncNotificationHandler<TNotification> handler, TNotification notification, CancellationToken cancellationToken) where TNotification : INotification
+        {
+            return handler.Handle(notification, cancellationToken);
+        }
+    }
+
+    public class SequentialMediator : Mediator
+    {
+        public SequentialMediator(SingleInstanceFactory singleInstanceFactory, MultiInstanceFactory multiInstanceFactory)
+            : base(singleInstanceFactory, multiInstanceFactory)
+        {
+            
+        }
+
+        protected override async Task DispatchAsyncNotification<TNotification>(IAsyncNotificationHandler<TNotification> handler, TNotification notification)
+        {
+            await base.DispatchAsyncNotification(handler, notification);
+        }
+
+        protected override async Task DispatchCancellableAsyncNotification<TNotification>(ICancellableAsyncNotificationHandler<TNotification> handler,
+            TNotification notification, CancellationToken cancellationToken)
+        {
+            await base.DispatchCancellableAsyncNotification(handler, notification, cancellationToken);
         }
     }
 }

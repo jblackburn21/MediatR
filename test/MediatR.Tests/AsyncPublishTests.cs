@@ -77,6 +77,45 @@
             result.ShouldContain("Ping Pung");
         }
 
+        [Fact]
+        public async Task Should_resolve_handler_for_list_of_generic_notifications()
+        {
+            var builder = new StringBuilder();
+            var writer = new StringWriter(builder);
+
+            var container = new Container(cfg =>
+            {
+                cfg.Scan(scanner =>
+                {
+                    scanner.AssemblyContainingType(typeof(AsyncPublishTests));
+                    scanner.IncludeNamespaceContainingType<Ping>();
+                    scanner.WithDefaultConventions();
+                    scanner.AddAllTypesOf(typeof(IAsyncNotificationHandler<>));
+                });
+                cfg.For<TextWriter>().Use(writer);
+                cfg.For<IMediator>().Use<Mediator>();
+                cfg.For<SingleInstanceFactory>().Use<SingleInstanceFactory>(ctx => t => ctx.GetInstance(t));
+                cfg.For<MultiInstanceFactory>().Use<MultiInstanceFactory>(ctx => t => ctx.GetAllInstances(t));
+            });
+
+            var mediator = container.GetInstance<IMediator>();
+
+            var pings = new List<INotification>()
+            {
+                new Ping {Message = "Ping"}
+            };
+
+            foreach (var ping in pings)
+            {
+                await mediator.Publish(ping);
+            }
+
+            var result = builder.ToString().Split(new[] { Environment.NewLine }, StringSplitOptions.None);
+            result.ShouldContain("Ping Pong");
+            result.ShouldContain("Ping Pung");
+        }
+
+
         public class SequentialMediator : Mediator
         {
             public SequentialMediator(SingleInstanceFactory singleInstanceFactory, MultiInstanceFactory multiInstanceFactory) 

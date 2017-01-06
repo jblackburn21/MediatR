@@ -18,6 +18,10 @@
         private static readonly ConcurrentDictionary<Type, RequestHandler> _voidRequestHandlers = new ConcurrentDictionary<Type, RequestHandler>();
         private static readonly ConcurrentDictionary<Type, object> _requestHandlers = new ConcurrentDictionary<Type, object>();
 
+        private readonly ConcurrentDictionary<Type, Type> _genericHandlerCache;
+        private readonly ConcurrentDictionary<Type, Type> _wrapperHandlerCache;
+
+
         /// <summary>
         /// Initializes a new instance of the <see cref="Mediator"/> class.
         /// </summary>
@@ -27,6 +31,9 @@
         {
             _singleInstanceFactory = singleInstanceFactory;
             _multiInstanceFactory = multiInstanceFactory;
+
+            _genericHandlerCache = new ConcurrentDictionary<Type, Type>();
+            _wrapperHandlerCache = new ConcurrentDictionary<Type, Type>();
         }
 
         public Task<TResponse> Send<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken = default(CancellationToken))
@@ -52,19 +59,17 @@
         public Task Publish<TNotification>(TNotification notification, CancellationToken cancellationToken = default(CancellationToken))
             where TNotification : INotification
         {
-            var notificationType = typeof(TNotification);
-            var notificationHandlers = _multiInstanceFactory(typeof(INotificationHandler<>).MakeGenericType(notificationType))
-                .Cast<INotificationHandler<TNotification>>()
+            var notificationHandlers = GetNotificationHandlers(notification)
                 .Select(handler =>
                 {
                     handler.Handle(notification);
                     return Unit.Task;
                 });
-            var asyncNotificationHandlers = _multiInstanceFactory(typeof(IAsyncNotificationHandler<>).MakeGenericType(notificationType))
-                .Cast<IAsyncNotificationHandler<TNotification>>()
+
+            var asyncNotificationHandlers = GetAsyncNotificationHandlers(notification)
                 .Select(handler => handler.Handle(notification));
-            var cancellableAsyncNotificationHandlers = _multiInstanceFactory(typeof(ICancellableAsyncNotificationHandler<>).MakeGenericType(notificationType))
-                .Cast<ICancellableAsyncNotificationHandler<TNotification>>()
+
+            var cancellableAsyncNotificationHandlers = GetCancellableAsyncNotificationHandlers(notification)
                 .Select(handler => handler.Handle(notification, cancellationToken));
 
             var allHandlers = notificationHandlers
@@ -83,5 +88,53 @@
         {
             return Task.WhenAll(allHandlers);
         }
+
+        private IEnumerable<NotificationHandlerWrapper> GetNotificationHandlers(INotification notification)
+        {
+            return GetNotificationHandlers<NotificationHandlerWrapper>(notification,
+                typeof(INotificationHandler<>),
+                typeof(NotificationHandlerWrapper<>));
+        }
+
+        private IEnumerable<AsyncNotificationHandlerWrapper> GetAsyncNotificationHandlers(INotification notification)
+        {
+            return GetNotificationHandlers<AsyncNotificationHandlerWrapper>(notification,
+                typeof(IAsyncNotificationHandler<>),
+                typeof(AsyncNotificationHandlerWrapper<>));
+        }
+
+        private IEnumerable<CancellableAsyncNotificationHandlerWrapper> GetCancellableAsyncNotificationHandlers(INotification notification)
+        {
+            return GetNotificationHandlers<CancellableAsyncNotificationHandlerWrapper>(notification,
+                typeof(ICancellableAsyncNotificationHandler<>),
+                typeof(CancellableAsyncNotificationHandlerWrapper<>));
+        }
+
+        private IEnumerable<TWrapper> GetNotificationHandlers<TWrapper>(object notification, Type handlerType, Type wrapperType)
+        {
+            var notificationType = notification.GetType();
+
+            var genericHandlerType = handlerType.MakeGenericType(notificationType);// _genericHandlerCache.GetOrAdd(notificationType, handlerType, (type, root) => root.MakeGenericType(type));
+            var genericWrapperType = wrapperType.MakeGenericType(notificationType);//_wrapperHandlerCache.GetOrAdd(notificationType, wrapperType, (type, root) => root.MakeGenericType(type)));
+
+            return GetNotificationHandlers(notification, genericHandlerType)
+                .Select(handler => Activator.CreateInstance(genericWrapperType, handler))
+                .Cast<TWrapper>()
+                .ToList();
+        }
+
+        private IEnumerable<object> GetNotificationHandlers(object notification, Type handlerType)
+        {
+            try
+            {
+                return _multiInstanceFactory(handlerType);
+            }
+            catch (Exception e)
+            {
+                //throw BuildException(notification, e);
+                throw;
+            }
+        }
+
     }
 }
